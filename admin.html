@@ -98,13 +98,12 @@ function header(){
 
 function stats(){
   const open = (DATA.sessions||[]).filter(s => !s.end).length;
-  const totalH = Object.values(DATA.hoursByDriver||{}).reduce((a,b)=>a+b,0);
   const totalFuel = (DATA.cars||[]).filter(c=>c.active!==false).reduce((a,c)=>a+(Number(c.fuel)||0),0);
   return el('div',{class:'stats'},
     el('div',{class:'stat'}, el('div',{class:'n'}, (DATA.drivers||[]).length), el('div',{class:'l'},'მძღოლი')),
     el('div',{class:'stat'}, el('div',{class:'n'}, (DATA.cars||[]).length), el('div',{class:'l'},'მანქანა')),
     el('div',{class:'stat'}, el('div',{class:'n'}, open), el('div',{class:'l'},'მიმდინარე სვლა')),
-    el('div',{class:'stat'}, el('div',{class:'n'}, totalFuel.toFixed(0)+'ლ'), el('div',{class:'l'},'საწვავი ჯამში'))
+    el('div',{class:'stat'}, el('div',{class:'n'}, totalFuel.toFixed(0)+'ლ'), el('div',{class:'l'},'ბარათებზე ჯამში'))
   );
 }
 
@@ -112,7 +111,7 @@ function tabs(){
   const items = [
     ['overview','📊 მთავარი'],
     ['sessions','🕒 სესიები'],
-    ['fuel','⛽ საწვავი'],
+    ['fuel','⛽ ბარათები'],
     ['drivers','👤 მძღოლები'],
     ['cars','🚗 მანქანები']
   ];
@@ -148,7 +147,7 @@ function driverHours(){
   );
 }
 
-function sessionRows(rows, live){
+function sessionRows(rows){
   if (!rows.length) return el('div',{class:'hint'},'ჩანაწერი არ არის');
   const drv = id => (DATA.drivers||[]).find(d=>String(d.id)===String(id));
   const car = id => (DATA.cars||[]).find(c=>String(c.id)===String(id));
@@ -160,12 +159,16 @@ function sessionRows(rows, live){
       )),
       el('tbody',{}, rows.map(s => {
         const d = drv(s.driver_id); const c = car(s.car_id);
+        const isAuto = s.auto_closed===true || s.auto_closed==='true';
         return el('tr',{},
           el('td',{}, (d? d.name : '#'+s.driver_id)),
           el('td',{}, c ? c.plate+' · '+c.name : '#'+s.car_id),
           el('td',{}, fmtTime(s.start)),
-          el('td',{}, s.end ? fmtTime(s.end) : el('span',{class:'tag live'}, 'მიმდინარე'),
-            ' ', s.auto_closed===true || s.auto_closed==='true' ? el('span',{class:'tag auto'},'ავტო') : null),
+          el('td',{},
+            s.end ? fmtTime(s.end) : el('span',{class:'tag live'}, 'მიმდინარე'),
+            ' ',
+            isAuto ? el('span',{class:'tag auto'},'ავტო') : null
+          ),
           el('td',{}, dur(s.start, s.end))
         );
       }))
@@ -182,29 +185,56 @@ function sessionsTbl(){
 
 function fuelTbl(){
   const drv = id => (DATA.drivers||[]).find(d=>String(d.id)===String(id));
-  const car = id => (DATA.cars||[]).find(c=>String(c.id)===String(id));
-  return el('div',{class:'card'},
-    el('h2',{},'⛽ საწვავის ისტორია'),
+  const carById = id => (DATA.cars||[]).find(c=>String(c.id)===String(id));
+
+  const cars = (DATA.cars||[]).filter(c=>c.active!==false && c.active!=='false');
+  const cardsCard = el('div',{class:'card'});
+  cardsCard.append(el('h2',{},'💳 ბარათების მიმდინარე ბალანსი'));
+  if (!cars.length) cardsCard.append(el('div',{class:'hint'},'მანქანა არ არის'));
+  else {
+    cardsCard.append(el('table',{},
+      el('thead',{}, el('tr',{},
+        el('th',{},'მანქანა'), el('th',{},'ბარათზე'), el('th',{},'სტატუსი')
+      )),
+      el('tbody',{}, cars.map(c => {
+        const fuel = Number(c.fuel) || 0;
+        const status = fuel <= 0 ? ['empty','⚠️ ცარიელი'] : fuel < 30 ? ['low','🟡 ცოტა დარჩა'] : ['live','✓ ნორმალური'];
+        return el('tr',{},
+          el('td',{}, c.plate + ' · ' + c.name),
+          el('td',{style:'font-weight:700;font-size:16px'}, fuel.toFixed(1)+'ლ'),
+          el('td',{}, el('span',{class:'tag '+status[0]}, status[1]))
+        );
+      }))
+    ));
+  }
+
+  const histCard = el('div',{class:'card'},
+    el('h2',{},'📋 ჩასხმების ისტორია'),
     !DATA.fuel.length ? el('div',{class:'hint'},'ჩანაწერი არ არის') :
     el('div',{style:'overflow-x:auto'},
       el('table',{},
         el('thead',{}, el('tr',{},
           el('th',{},'დრო'), el('th',{},'მანქანა'), el('th',{},'მძღოლი'),
-          el('th',{},'ჩასხმული'), el('th',{},'დარჩენილი')
+          el('th',{},'ჩაასხა'), el('th',{},'ბარათზე დარჩა')
         )),
         el('tbody',{}, DATA.fuel.map(f => {
-          const d = drv(f.driver_id); const c = car(f.car_id);
+          const d = drv(f.driver_id); const c = carById(f.car_id);
           return el('tr',{},
             el('td',{}, fmtTime(f.time)),
             el('td',{}, c ? c.plate : '#'+f.car_id),
             el('td',{}, d ? d.name : '#'+f.driver_id),
             el('td',{}, (f.liters_added||0)+'ლ'),
-            el('td',{}, (f.liters_after||0)+'ლ')
+            el('td',{style:'font-weight:600'}, (f.liters_after||0)+'ლ')
           );
         }))
       )
     )
   );
+
+  const wrap = el('div');
+  wrap.append(cardsCard);
+  wrap.append(histCard);
+  return wrap;
 }
 
 function driversTbl(){
@@ -212,7 +242,6 @@ function driversTbl(){
   const card = el('div',{class:'card'});
   card.append(el('h2',{},'👤 მძღოლები'));
 
-  // form
   const form = el('form', { onsubmit: async e=>{
     e.preventDefault();
     const fd = new FormData(form);
@@ -265,13 +294,13 @@ function carsTbl(){
       el('label',{},'ნომერი',el('input',{name:'plate',required:true,placeholder:'AA-001-AA'})),
       el('label',{},'სახელი/მოდელი',el('input',{name:'name',required:true,placeholder:'Toyota Prius'}))
     ),
-    el('label',{},'საწვავი (ლიტრი) — საწყისი',el('input',{name:'fuel',type:'number',step:'0.01',placeholder:'მაგ. 35'})),
+    el('label',{},'ბარათზე ლიტრი — საწყისი',el('input',{name:'fuel',type:'number',step:'0.01',placeholder:'მაგ. 100'})),
     el('button',{type:'submit',class:'btn primary'},'+ მანქანის დამატება')
   );
   card.append(form);
 
   card.append(el('table',{},
-    el('thead',{}, el('tr',{}, el('th',{},'ნომერი'), el('th',{},'სახელი'), el('th',{},'საწვავი'), el('th',{},''))),
+    el('thead',{}, el('tr',{}, el('th',{},'ნომერი'), el('th',{},'სახელი'), el('th',{},'ბარათზე'), el('th',{},''))),
     el('tbody',{}, list.map(c => el('tr',{},
       el('td',{}, c.plate),
       el('td',{}, c.name),
@@ -287,7 +316,6 @@ function carsTbl(){
   return card;
 }
 
-// bootstrap
 if (!window.API_URL || window.API_URL.includes('PASTE_')) {
   $('#app').innerHTML = '<div class="card error"><h2>კონფიგი საჭიროა</h2><p>გახსენი <code>config.js</code> და ჩაწერე შენი Apps Script Web App URL.</p></div>';
 } else if (adminPin()) {
