@@ -12,7 +12,6 @@
 
 <script src="config.js"></script>
 <script>
-// ---------- helpers ----------
 const $ = (sel, root=document) => root.querySelector(sel);
 const el = (tag, attrs={}, ...children) => {
   const e = document.createElement(tag);
@@ -29,11 +28,10 @@ const el = (tag, attrs={}, ...children) => {
 };
 
 async function api(action, body={}) {
-  const url = window.API_URL;
-  const res = await fetch(url, {
+  const res = await fetch(window.API_URL, {
     method: 'POST',
     body: JSON.stringify({ action, ...body }),
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' } // CORS-სთვის simple request
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
   });
   return res.json();
 }
@@ -65,7 +63,6 @@ function dur(start, end) {
   return h + 'სთ ' + m + 'წთ';
 }
 
-// ---------- screens ----------
 function renderLogin() {
   const root = $('#app');
   root.innerHTML = '';
@@ -138,7 +135,7 @@ function startSessionCard(cars) {
   const select = el('select', { name:'car_id', required:true },
     el('option', { value:'' }, '— აირჩიე მანქანა —'),
     ...cars.map(c => el('option', { value: c.id },
-      c.plate + ' · ' + c.name + ' (საწვავი: ' + (c.fuel ?? '?') + 'ლ)'
+      c.plate + ' · ' + c.name + ' (ბარათზე: ' + (c.fuel ?? '?') + 'ლ)'
     ))
   );
 
@@ -180,7 +177,6 @@ function activeSessionCard(s) {
       renderHome();
     }}, 'სვლის დასრულება')
   );
-  // ცოცხალი ტაიმერი
   setInterval(() => { const e = $('#liveDur'); if (e) e.textContent = dur(s.start); }, 30000);
   return card;
 }
@@ -201,18 +197,18 @@ function refuelCard(carId) {
   }});
   form.append(
     el('h2', {}, '⛽ საწვავის ჩასხმა'),
-    el('label', {}, 'ჩასხმული (ლიტრი)',
-      el('input', { name:'added', type:'number', step:'0.01', inputmode:'decimal', placeholder:'მაგ. 20' })
+    el('div', { class:'hint' }, '💳 ბარათით ჩასხმის შემდეგ მიუთითე რამდენი ლიტრი დარჩა ბარათზე.'),
+    el('label', {}, 'ჩაასხი (ლიტრი)',
+      el('input', { name:'added', type:'number', step:'0.01', inputmode:'decimal', placeholder:'მაგ. 30' })
     ),
-    el('label', {}, 'დარჩენილი ჩასხმის შემდეგ (ლიტრი)',
-      el('input', { name:'after', type:'number', step:'0.01', inputmode:'decimal', required:true, placeholder:'მაგ. 45' })
+    el('label', {}, 'ბარათზე დარჩა (ლიტრი)',
+      el('input', { name:'after', type:'number', step:'0.01', inputmode:'decimal', required:true, placeholder:'მაგ. 70' })
     ),
     el('button', { type:'submit', class:'btn ok' }, 'ჩაწერა')
   );
   return form;
 }
 
-// ---------- bootstrap ----------
 if (!window.API_URL || window.API_URL.includes('PASTE_')) {
   $('#app').innerHTML = '<div class="card error"><h2>კონფიგი საჭიროა</h2><p>გახსენი <code>config.js</code> და ჩაწერე შენი Apps Script Web App URL.</p></div>';
 } else if (store.token) {
