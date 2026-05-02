@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ka">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d6efd">
+<title>მძღოლის პანელი</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"></div>
+
+<script src="config.js"></script>
+<script>
+// ---------- helpers ----------
+const $ = (sel, root=document) => root.querySelector(sel);
+const el = (tag, attrs={}, ...children) => {
+  const e = document.createElement(tag);
+  Object.entries(attrs).forEach(([k,v]) => {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  });
+  children.flat().forEach(c => {
+    if (c == null || c === false) return;
+    e.append(c.nodeType ? c : document.createTextNode(c));
+  });
+  return e;
+};
+
+async function api(action, body={}) {
+  const url = window.API_URL;
+  const res = await fetch(url, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...body }),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' } // CORS-სთვის simple request
+  });
+  return res.json();
+}
+
+const store = {
+  get token() { return localStorage.getItem('token'); },
+  set token(v) { v ? localStorage.setItem('token', v) : localStorage.removeItem('token'); },
+  get driver() { try { return JSON.parse(localStorage.getItem('driver')); } catch(e) { return null; } },
+  set driver(v) { v ? localStorage.setItem('driver', JSON.stringify(v)) : localStorage.removeItem('driver'); }
+};
+
+function toast(msg, type='info') {
+  const t = el('div', { class: 'toast ' + type }, msg);
+  document.body.append(t);
+  setTimeout(() => t.classList.add('show'), 10);
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 2500);
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('ka-GE', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+
+function dur(start, end) {
+  const ms = (end ? new Date(end) : new Date()) - new Date(start);
+  const h = Math.floor(ms/3600000);
+  const m = Math.floor((ms%3600000)/60000);
+  return h + 'სთ ' + m + 'წთ';
+}
+
+// ---------- screens ----------
+function renderLogin() {
+  const root = $('#app');
+  root.innerHTML = '';
+  const form = el('form', { class: 'card login', onsubmit: async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const res = await api('login', { username: fd.get('username'), pin: fd.get('pin') });
+    if (!res.ok) return toast(res.error || 'შეცდომა', 'error');
+    store.token = res.token;
+    store.driver = res.driver;
+    toast('მოგესალმებით, ' + res.driver.name);
+    renderHome();
+  }});
+  form.append(
+    el('div', { class: 'logo' }, '🚗'),
+    el('h1', {}, 'მძღოლის შესვლა'),
+    el('label', {}, 'მომხმარებელი',
+      el('input', { name:'username', required:true, autocomplete:'username', placeholder:'მაგ. giorgi' })
+    ),
+    el('label', {}, 'PIN კოდი',
+      el('input', { name:'pin', required:true, type:'tel', inputmode:'numeric', pattern:'[0-9]*', placeholder:'••••' })
+    ),
+    el('button', { type:'submit', class:'btn primary big' }, 'შესვლა'),
+    el('a', { href:'admin.html', class:'admin-link' }, 'ადმინ პანელი →')
+  );
+  root.append(form);
+}
+
+async function renderHome() {
+  if (!store.token) return renderLogin();
+  const root = $('#app');
+  root.innerHTML = '';
+  root.append(el('div', { class:'loading' }, 'იტვირთება...'));
+
+  const [my, carsRes] = await Promise.all([
+    api('mySession', { token: store.token }),
+    api('cars')
+  ]);
+
+  if (!my.ok && my.error === 'შესვლა საჭიროა') {
+    store.token = null;
+    return renderLogin();
+  }
+
+  root.innerHTML = '';
+  root.append(header());
+
+  if (my.session) {
+    root.append(activeSessionCard(my.session));
+    root.append(refuelCard(my.session.car_id));
+  } else {
+    root.append(startSessionCard(carsRes.cars || []));
+  }
+}
+
+function header() {
+  const d = store.driver || {};
+  return el('div', { class:'header' },
+    el('div', {},
+      el('div', { class:'hello' }, '👋 ' + (d.name || '')),
+      el('div', { class:'sub' }, '@' + (d.username || ''))
+    ),
+    el('button', { class:'btn ghost small', onclick: () => {
+      store.token = null; store.driver = null; renderLogin();
+    }}, 'გასვლა')
+  );
+}
+
+function startSessionCard(cars) {
+  const select = el('select', { name:'car_id', required:true },
+    el('option', { value:'' }, '— აირჩიე მანქანა —'),
+    ...cars.map(c => el('option', { value: c.id },
+      c.plate + ' · ' + c.name + ' (საწვავი: ' + (c.fuel ?? '?') + 'ლ)'
+    ))
+  );
+
+  const form = el('form', { class:'card', onsubmit: async e => {
+    e.preventDefault();
+    const carId = select.value;
+    if (!carId) return toast('აირჩიე მანქანა', 'error');
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true; btn.textContent = 'იწყება...';
+    const res = await api('startSession', { token: store.token, car_id: carId });
+    btn.disabled = false; btn.textContent = 'სვლის დაწყება';
+    if (!res.ok) return toast(res.error || 'შეცდომა', 'error');
+    toast('სესია დაიწყო');
+    renderHome();
+  }});
+
+  form.append(
+    el('h2', {}, 'სვლის დაწყება'),
+    el('label', {}, 'მანქანა', select),
+    el('button', { type:'submit', class:'btn primary big' }, 'სვლის დაწყება'),
+    el('div', { class:'hint' }, 'თუ ამ მანქანაზე ვინმეს გახსნილი სესია აქვს, ის ავტომატურად დაიხურება ახლანდელი დროით.')
+  );
+  return form;
+}
+
+function activeSessionCard(s) {
+  const card = el('div', { class:'card active' },
+    el('div', { class:'badge' }, 'სვლა მიმდინარეობს'),
+    el('h2', {}, s.car ? s.car.plate + ' · ' + s.car.name : 'მანქანა #' + s.car_id),
+    el('div', { class:'row' },
+      el('div', {}, el('div', { class:'lbl' }, 'დაწყება'), el('div', { class:'val' }, fmtTime(s.start))),
+      el('div', {}, el('div', { class:'lbl' }, 'ხანგრძლივობა'), el('div', { class:'val', id:'liveDur' }, dur(s.start)))
+    ),
+    el('button', { class:'btn danger big', onclick: async () => {
+      if (!confirm('დასრულდეს სვლა ამ წუთიდან?')) return;
+      const res = await api('endSession', { token: store.token });
+      if (!res.ok) return toast(res.error, 'error');
+      toast('სვლა დასრულდა');
+      renderHome();
+    }}, 'სვლის დასრულება')
+  );
+  // ცოცხალი ტაიმერი
+  setInterval(() => { const e = $('#liveDur'); if (e) e.textContent = dur(s.start); }, 30000);
+  return card;
+}
+
+function refuelCard(carId) {
+  const form = el('form', { class:'card', onsubmit: async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const res = await api('refuel', {
+      token: store.token,
+      car_id: carId,
+      liters_added: Number(fd.get('added') || 0),
+      liters_after: Number(fd.get('after'))
+    });
+    if (!res.ok) return toast(res.error, 'error');
+    toast('საწვავი ჩაწერილია ✓');
+    form.reset();
+  }});
+  form.append(
+    el('h2', {}, '⛽ საწვავის ჩასხმა'),
+    el('label', {}, 'ჩასხმული (ლიტრი)',
+      el('input', { name:'added', type:'number', step:'0.01', inputmode:'decimal', placeholder:'მაგ. 20' })
+    ),
+    el('label', {}, 'დარჩენილი ჩასხმის შემდეგ (ლიტრი)',
+      el('input', { name:'after', type:'number', step:'0.01', inputmode:'decimal', required:true, placeholder:'მაგ. 45' })
+    ),
+    el('button', { type:'submit', class:'btn ok' }, 'ჩაწერა')
+  );
+  return form;
+}
+
+// ---------- bootstrap ----------
+if (!window.API_URL || window.API_URL.includes('PASTE_')) {
+  $('#app').innerHTML = '<div class="card error"><h2>კონფიგი საჭიროა</h2><p>გახსენი <code>config.js</code> და ჩაწერე შენი Apps Script Web App URL.</p></div>';
+} else if (store.token) {
+  renderHome();
+} else {
+  renderLogin();
+}
+</script>
+</body>
+</html>
