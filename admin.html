@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ka">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ადმინ პანელი</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"></div>
+
+<script src="config.js"></script>
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const el = (tag, attrs={}, ...children) => {
+  const e = document.createElement(tag);
+  Object.entries(attrs).forEach(([k,v]) => {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  });
+  children.flat().forEach(c => { if (c == null || c === false) return; e.append(c.nodeType ? c : document.createTextNode(c)); });
+  return e;
+};
+
+async function api(action, body={}) {
+  const res = await fetch(window.API_URL, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...body }),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  });
+  return res.json();
+}
+
+function toast(msg, type='info') {
+  const t = el('div', { class: 'toast ' + type }, msg);
+  document.body.append(t);
+  setTimeout(() => t.classList.add('show'), 10);
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 2500);
+}
+function fmtTime(iso){ if(!iso) return '—'; return new Date(iso).toLocaleString('ka-GE',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+function dur(s,e){ if(!s) return '—'; const ms=(e?new Date(e):new Date())-new Date(s); const h=Math.floor(ms/3600000); const m=Math.floor((ms%3600000)/60000); return h+'სთ '+m+'წთ'; }
+
+const adminPin = () => sessionStorage.getItem('admin_pin');
+let DATA = null;
+let TAB = 'overview';
+
+function renderLogin(){
+  const root = $('#app'); root.innerHTML = '';
+  const form = el('form', { class:'card login', onsubmit: async e=>{
+    e.preventDefault();
+    const pin = $('#apin').value;
+    sessionStorage.setItem('admin_pin', pin);
+    await load();
+  }});
+  form.append(
+    el('div',{class:'logo'},'🛡️'),
+    el('h1',{},'ადმინ პანელი'),
+    el('label',{},'ადმინ PIN', el('input',{id:'apin',type:'password',required:true,inputmode:'numeric',pattern:'[0-9]*'})),
+    el('button',{type:'submit',class:'btn primary big'},'შესვლა'),
+    el('a',{href:'index.html',class:'admin-link'},'← მძღოლის შესვლა')
+  );
+  root.append(form);
+}
+
+async function load(){
+  const res = await api('admin', { admin_pin: adminPin() });
+  if (!res.ok){ sessionStorage.removeItem('admin_pin'); toast(res.error || 'შეცდომა', 'error'); return renderLogin(); }
+  DATA = res;
+  render();
+}
+
+function render(){
+  const root = $('#app'); root.innerHTML = '';
+  root.append(header());
+  root.append(stats());
+  root.append(tabs());
+  if (TAB === 'overview') root.append(overview());
+  if (TAB === 'sessions') root.append(sessionsTbl());
+  if (TAB === 'fuel')     root.append(fuelTbl());
+  if (TAB === 'drivers')  root.append(driversTbl());
+  if (TAB === 'cars')     root.append(carsTbl());
+}
+
+function header(){
+  return el('div',{class:'header'},
+    el('div',{},
+      el('div',{class:'hello'},'🛡️ ადმინ პანელი'),
+      el('div',{class:'sub'}, fmtTime(new Date().toISOString()))
+    ),
+    el('div',{},
+      el('button',{class:'btn ghost small',onclick:load},'🔄 განახლება'),
+      ' ',
+      el('button',{class:'btn ghost small',onclick:()=>{sessionStorage.removeItem('admin_pin'); renderLogin();}},'გასვლა')
+    )
+  );
+}
+
+function stats(){
+  const open = (DATA.sessions||[]).filter(s => !s.end).length;
+  const totalH = Object.values(DATA.hoursByDriver||{}).reduce((a,b)=>a+b,0);
+  const totalFuel = (DATA.cars||[]).filter(c=>c.active!==false).reduce((a,c)=>a+(Number(c.fuel)||0),0);
+  return el('div',{class:'stats'},
+    el('div',{class:'stat'}, el('div',{class:'n'}, (DATA.drivers||[]).length), el('div',{class:'l'},'მძღოლი')),
+    el('div',{class:'stat'}, el('div',{class:'n'}, (DATA.cars||[]).length), el('div',{class:'l'},'მანქანა')),
+    el('div',{class:'stat'}, el('div',{class:'n'}, open), el('div',{class:'l'},'მიმდინარე სვლა')),
+    el('div',{class:'stat'}, el('div',{class:'n'}, totalFuel.toFixed(0)+'ლ'), el('div',{class:'l'},'საწვავი ჯამში'))
+  );
+}
+
+function tabs(){
+  const items = [
+    ['overview','📊 მთავარი'],
+    ['sessions','🕒 სესიები'],
+    ['fuel','⛽ საწვავი'],
+    ['drivers','👤 მძღოლები'],
+    ['cars','🚗 მანქანები']
+  ];
+  return el('div',{class:'admin-tabs'},
+    items.map(([k,l]) => el('button',{class: k===TAB ? 'active' : '', onclick:()=>{TAB=k; render();}}, l))
+  );
+}
+
+function overview(){
+  const wrap = el('div');
+  wrap.append(el('div',{class:'card'},
+    el('h2',{}, 'მიმდინარე სვლები'),
+    sessionRows((DATA.sessions||[]).filter(s=>!s.end), true)
+  ));
+  wrap.append(el('div',{class:'card'},
+    el('h2',{}, 'მძღოლების სამუშაო საათები (ჯამური)'),
+    driverHours()
+  ));
+  return wrap;
+}
+
+function driverHours(){
+  const map = DATA.hoursByDriver || {};
+  const items = (DATA.drivers||[]).map(d => ({ d, h: map[d.id] || 0 }));
+  items.sort((a,b)=>b.h - a.h);
+  if (!items.length) return el('div',{class:'hint'},'ჩანაწერი არ არის');
+  return el('table',{},
+    el('thead',{}, el('tr',{}, el('th',{},'მძღოლი'), el('th',{},'საათები'))),
+    el('tbody',{}, items.map(({d,h}) => el('tr',{},
+      el('td',{}, d.name),
+      el('td',{}, h.toFixed(1)+' სთ')
+    )))
+  );
+}
+
+function sessionRows(rows, live){
+  if (!rows.length) return el('div',{class:'hint'},'ჩანაწერი არ არის');
+  const drv = id => (DATA.drivers||[]).find(d=>String(d.id)===String(id));
+  const car = id => (DATA.cars||[]).find(c=>String(c.id)===String(id));
+  return el('div',{style:'overflow-x:auto'},
+    el('table',{},
+      el('thead',{}, el('tr',{},
+        el('th',{},'მძღოლი'), el('th',{},'მანქანა'),
+        el('th',{},'დაწყება'), el('th',{},'დასრულება'), el('th',{},'ხანგრძლ.')
+      )),
+      el('tbody',{}, rows.map(s => {
+        const d = drv(s.driver_id); const c = car(s.car_id);
+        return el('tr',{},
+          el('td',{}, (d? d.name : '#'+s.driver_id)),
+          el('td',{}, c ? c.plate+' · '+c.name : '#'+s.car_id),
+          el('td',{}, fmtTime(s.start)),
+          el('td',{}, s.end ? fmtTime(s.end) : el('span',{class:'tag live'}, 'მიმდინარე'),
+            ' ', s.auto_closed===true || s.auto_closed==='true' ? el('span',{class:'tag auto'},'ავტო') : null),
+          el('td',{}, dur(s.start, s.end))
+        );
+      }))
+    )
+  );
+}
+
+function sessionsTbl(){
+  return el('div',{class:'card'},
+    el('h2',{},'ყველა სესია (ბოლო 200)'),
+    sessionRows(DATA.sessions||[])
+  );
+}
+
+function fuelTbl(){
+  const drv = id => (DATA.drivers||[]).find(d=>String(d.id)===String(id));
+  const car = id => (DATA.cars||[]).find(c=>String(c.id)===String(id));
+  return el('div',{class:'card'},
+    el('h2',{},'⛽ საწვავის ისტორია'),
+    !DATA.fuel.length ? el('div',{class:'hint'},'ჩანაწერი არ არის') :
+    el('div',{style:'overflow-x:auto'},
+      el('table',{},
+        el('thead',{}, el('tr',{},
+          el('th',{},'დრო'), el('th',{},'მანქანა'), el('th',{},'მძღოლი'),
+          el('th',{},'ჩასხმული'), el('th',{},'დარჩენილი')
+        )),
+        el('tbody',{}, DATA.fuel.map(f => {
+          const d = drv(f.driver_id); const c = car(f.car_id);
+          return el('tr',{},
+            el('td',{}, fmtTime(f.time)),
+            el('td',{}, c ? c.plate : '#'+f.car_id),
+            el('td',{}, d ? d.name : '#'+f.driver_id),
+            el('td',{}, (f.liters_added||0)+'ლ'),
+            el('td',{}, (f.liters_after||0)+'ლ')
+          );
+        }))
+      )
+    )
+  );
+}
+
+function driversTbl(){
+  const list = (DATA.drivers||[]).filter(d => d.active !== false && d.active !== 'false');
+  const card = el('div',{class:'card'});
+  card.append(el('h2',{},'👤 მძღოლები'));
+
+  // form
+  const form = el('form', { onsubmit: async e=>{
+    e.preventDefault();
+    const fd = new FormData(form);
+    const res = await api('adminCreate', { admin_pin: adminPin(), type:'driver',
+      name: fd.get('name'), username: fd.get('username'), pin: fd.get('pin') });
+    if (!res.ok) return toast(res.error,'error');
+    toast('დამატებულია'); form.reset(); load();
+  }});
+  form.append(
+    el('div',{class:'row'},
+      el('label',{},'სახელი',el('input',{name:'name',required:true})),
+      el('label',{},'მომხმარებელი',el('input',{name:'username',required:true}))
+    ),
+    el('label',{},'PIN',el('input',{name:'pin',required:true,type:'tel',inputmode:'numeric',pattern:'[0-9]*'})),
+    el('button',{type:'submit',class:'btn primary'},'+ მძღოლის დამატება')
+  );
+  card.append(form);
+
+  card.append(el('table',{},
+    el('thead',{}, el('tr',{}, el('th',{},'სახელი'), el('th',{},'მომხმარებელი'), el('th',{},''))),
+    el('tbody',{}, list.map(d => el('tr',{},
+      el('td',{}, d.name),
+      el('td',{}, '@'+d.username),
+      el('td',{}, el('button',{class:'btn ghost small', onclick: async()=>{
+        if(!confirm('მართლა წაიშალოს?')) return;
+        const r = await api('adminDelete',{admin_pin:adminPin(),type:'driver',id:d.id});
+        if(!r.ok) return toast(r.error,'error');
+        toast('წაშლილია'); load();
+      }},'წაშლა'))
+    )))
+  ));
+  return card;
+}
+
+function carsTbl(){
+  const list = (DATA.cars||[]).filter(c => c.active !== false && c.active !== 'false');
+  const card = el('div',{class:'card'});
+  card.append(el('h2',{},'🚗 მანქანები'));
+
+  const form = el('form', { onsubmit: async e=>{
+    e.preventDefault();
+    const fd = new FormData(form);
+    const res = await api('adminCreate', { admin_pin: adminPin(), type:'car',
+      plate: fd.get('plate'), name: fd.get('name'), fuel: fd.get('fuel') });
+    if (!res.ok) return toast(res.error,'error');
+    toast('დამატებულია'); form.reset(); load();
+  }});
+  form.append(
+    el('div',{class:'row'},
+      el('label',{},'ნომერი',el('input',{name:'plate',required:true,placeholder:'AA-001-AA'})),
+      el('label',{},'სახელი/მოდელი',el('input',{name:'name',required:true,placeholder:'Toyota Prius'}))
+    ),
+    el('label',{},'საწვავი (ლიტრი) — საწყისი',el('input',{name:'fuel',type:'number',step:'0.01',placeholder:'მაგ. 35'})),
+    el('button',{type:'submit',class:'btn primary'},'+ მანქანის დამატება')
+  );
+  card.append(form);
+
+  card.append(el('table',{},
+    el('thead',{}, el('tr',{}, el('th',{},'ნომერი'), el('th',{},'სახელი'), el('th',{},'საწვავი'), el('th',{},''))),
+    el('tbody',{}, list.map(c => el('tr',{},
+      el('td',{}, c.plate),
+      el('td',{}, c.name),
+      el('td',{}, (c.fuel||0)+'ლ'),
+      el('td',{}, el('button',{class:'btn ghost small', onclick: async()=>{
+        if(!confirm('მართლა წაიშალოს?')) return;
+        const r = await api('adminDelete',{admin_pin:adminPin(),type:'car',id:c.id});
+        if(!r.ok) return toast(r.error,'error');
+        toast('წაშლილია'); load();
+      }},'წაშლა'))
+    )))
+  ));
+  return card;
+}
+
+// bootstrap
+if (!window.API_URL || window.API_URL.includes('PASTE_')) {
+  $('#app').innerHTML = '<div class="card error"><h2>კონფიგი საჭიროა</h2><p>გახსენი <code>config.js</code> და ჩაწერე შენი Apps Script Web App URL.</p></div>';
+} else if (adminPin()) {
+  load();
+} else {
+  renderLogin();
+}
+</script>
+</body>
+</html>
